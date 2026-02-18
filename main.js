@@ -151,7 +151,7 @@ app.get("/check", async (req, res) => {
   const discountedGames = results.filter(Boolean);
 
   if (discountedGames.length > 0) {
-    const sent = await sendEmail(discountedGames);
+    const sent = await sendEmail(discountedGames,RESEND_API_KEY,ALERT_EMAIL);
 
     if (sent) {
     const now = Date.now();

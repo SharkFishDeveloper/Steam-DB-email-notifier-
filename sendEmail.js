@@ -1,5 +1,5 @@
 // ================= EMAIL =================
-export async function sendEmail(discountedGames) {
+export async function sendEmail(discountedGames,RESEND_API_KEY,ALERT_EMAIL) {
   const gameCards = discountedGames
     .map(
       (game) => `
