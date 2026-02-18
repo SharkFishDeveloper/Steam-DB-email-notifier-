@@ -1,7 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { Redis } from "@upstash/redis";
-import { sendEmail } from "./sendEmail";
+import { sendEmail } from "./sendEmail.js";
 dotenv.config();
 
 const app = express();
