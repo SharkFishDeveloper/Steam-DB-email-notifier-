@@ -1,0 +1,15 @@
+name: Daily Steam Price Check
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Runs daily at 06:00 UTC
+  workflow_dispatch:     # Allows manual trigger from GitHub
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping /check endpoint
+        run: |
+          curl -s https://steam-db-email-notifier.onrender.com/check
