@@ -1,7 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { Redis } from "@upstash/redis";
-
+import { sendEmail } from "./sendEmail";
 dotenv.config();
 
 const app = express();
@@ -17,76 +17,9 @@ const redis = new Redis({
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 
-const COOLDOWN_SECONDS = 5 * 24 * 60 * 60; // 5 days
+const EMAIL_INTERVAL_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
 
-// ================= EMAIL =================
 
-async function sendEmail(discountedGames) {
-  const gameCards = discountedGames
-    .map(
-      (game) => `
-      <tr>
-        <td style="padding:20px;border-bottom:1px solid #eee;">
-          <h3 style="margin:0 0 8px 0;color:#1b2838;">${game.name}</h3>
-          <p style="margin:4px 0;">
-            <span style="font-weight:bold;">Current:</span> ₹${game.currentPrice}
-          </p>
-          <p style="margin:4px 0;">
-            <span style="font-weight:bold;">Your Target:</span> ₹${game.targetPrice}
-          </p>
-          <a href="https://store.steampowered.com/${game.type}/${game.id}"
-             style="display:inline-block;margin-top:10px;
-             padding:8px 16px;
-             background:#171a21;
-             color:white;
-             text-decoration:none;
-             border-radius:6px;
-             font-size:14px;">
-             View on Steam
-          </a>
-        </td>
-      </tr>
-    `
-    )
-    .join("");
-
-  const html = `
-  <div style="font-family:Arial,sans-serif;background:#f4f6f8;padding:30px;">
-    <table width="100%" style="max-width:600px;margin:auto;background:white;border-radius:10px;overflow:hidden;">
-      <tr>
-        <td style="background:#171a21;color:white;padding:20px;text-align:center;">
-          <h2 style="margin:0;"> Steam Price Alerts</h2>
-          <p style="margin:6px 0 0 0;font-size:14px;">
-            ${discountedGames.length} game(s) matched your target
-          </p>
-        </td>
-      </tr>
-      ${gameCards}
-      <tr>
-        <td style="padding:15px;text-align:center;font-size:12px;color:#888;">
-          Cooldown active for 5 days per game.
-        </td>
-      </tr>
-    </table>
-  </div>
-  `;
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: "noreply@codeheroes.store",
-      to: [ALERT_EMAIL],
-      subject: ` ${discountedGames.length} Steam Game(s) On Sale!`,
-      html,
-    }),
-  });
-
-  return response.ok;
-}
 
 // ================= PRICE CHECK =================
 
@@ -97,7 +30,11 @@ async function checkPrice(game) {
         ? `https://store.steampowered.com/api/packagedetails?packageids=${game.id}&cc=IN`
         : `https://store.steampowered.com/api/appdetails?appids=${game.id}&cc=IN`;
 
-    const res = await fetch(url);
+    // 🚀 Always fetch fresh from Steam (no caching)
+    const res = await fetch(url, {
+      headers: { "Cache-Control": "no-cache" },
+    });
+
     const data = await res.json();
     const item = data[game.id];
 
@@ -113,10 +50,19 @@ async function checkPrice(game) {
     const currentPrice = priceInfo.final / 100;
 
     if (currentPrice === 0) return null;
-    if (currentPrice > game.targetPrice) return null;
+    if (currentPrice > Number(game.targetPrice)) return null;
 
-    const cooldown = await redis.get(`cooldown:${game.id}`);
-    if (cooldown) return null;
+    // 🔥 Check last email time
+    const lastSent = await redis.get(`last_email_sent:${game.id}`);
+
+    if (lastSent) {
+      const now = Date.now();
+      const diff = now - Number(lastSent);
+
+      if (diff < EMAIL_INTERVAL_MS) {
+        return null; // Not old enough
+      }
+    }
 
     return { ...game, currentPrice };
   } catch (err) {
@@ -159,7 +105,7 @@ app.post("/games", async (req, res) => {
     name,
     type,
     id,
-    targetPrice,
+    targetPrice:Number(targetPrice),
   });
 
   res.json({ message: "Game added", name, id, type, targetPrice });
@@ -189,7 +135,7 @@ app.delete("/games", async (req, res) => {
     return res.status(400).json({ error: "Provide url or id" });
 
   await redis.del(`game:${gameId}`);
-  await redis.del(`cooldown:${gameId}`);
+  await redis.del(`last_email_sent:${gameId}`);
 
   res.json({ message: "Game removed", id: gameId });
 });
@@ -198,7 +144,9 @@ app.delete("/games", async (req, res) => {
 app.get("/check", async (req, res) => {
   const keys = await redis.keys("game:*");
   const games = await Promise.all(keys.map((k) => redis.get(k)));
-
+  if (games.length === 0) {
+  return res.json({ checked: 0, discounted: 0 });
+}
   const results = await Promise.all(games.map(checkPrice));
   const discountedGames = results.filter(Boolean);
 
@@ -206,13 +154,13 @@ app.get("/check", async (req, res) => {
     const sent = await sendEmail(discountedGames);
 
     if (sent) {
-      await Promise.all(
+    const now = Date.now();
+
+    await Promise.all(
         discountedGames.map((game) =>
-          redis.set(`cooldown:${game.id}`, game.currentPrice, {
-            ex: COOLDOWN_SECONDS,
-          })
+        redis.set(`last_email_sent:${game.id}`, now)
         )
-      );
+    );
     }
   }
 

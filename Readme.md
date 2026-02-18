@@ -1,170 +1,83 @@
-Steam Price Alert API
-Lightweight Express server that tracks Steam game prices and sends email alerts when prices fall below your target price.
+# Steam Price Alert API – Endpoints
 
-Built with:
+## 1. Add Game
 
-Express
+**POST** `/games`
 
-Upstash Redis
+Add a Steam game using its store URL.
 
-Resend (Email API)
+### Request Body
 
-Steam Store API
-
-Designed for Render or any Node.js hosting.
-
-BASE URL
-
-https://your-app.onrender.com
-
-ENVIRONMENT VARIABLES
-
-Set these in your deployment environment:
-
-UPSTASH_REDIS_REST_URL=your_upstash_url
-UPSTASH_REDIS_REST_TOKEN=your_upstash_token
-RESEND_API_KEY=your_resend_api_key
-ALERT_EMAIL=your_email_to_receive_alerts
-PORT=3000
-
-HOW IT WORKS
-
-Add a Steam game using its URL.
-
-The server stores it in Redis.
-
-Call /check endpoint (manually or via cron).
-
-If any game price is less than or equal to your target:
-
-A single summary email is sent.
-
-Cooldown is applied (default 5 days).
-
-No duplicate alerts unless price changes.
-
-API ENDPOINTS
-
-ADD GAME
-
-POST /games
-
-Request Body:
-
+```json
 {
-"url": "https://store.steampowered.com/app/1196590/
-",
-"targetPrice": 700
+  "url": "https://store.steampowered.com/app/1196590/",
+  "targetPrice": 700
 }
-
-What it does:
-
-Extracts app or sub type
-
-Extracts game ID
-
-Fetches real name from Steam
-
-Stores in Redis
-
-Response Example:
-
+```
+```json
 {
-"message": "Game added",
-"name": "Resident Evil Village",
-"id": "1196590",
-"type": "app",
-"targetPrice": 700
+  "message": "Game added",
+  "name": "Resident Evil Village",
+  "id": "1196590",
+  "type": "app",
+  "targetPrice": 700
 }
+```
 
-LIST ALL GAMES
+## 2. List all Games
 
-GET /games
+**GET** `/games`
 
-Response Example:
+Returns all tracked games.
 
+### Request Body
+
+```json
 [
-{
-"name": "Resident Evil Village",
-"type": "app",
-"id": "1196590",
-"targetPrice": 700
-}
+  {
+    "name": "Resident Evil Village",
+    "type": "app",
+    "id": "1196590",
+    "targetPrice": 700
+  }
 ]
+```
 
-DELETE GAME
+## 3. Delete Game
 
-DELETE /games
+**DELETE** `/games`
+```json
+Delete a game by ID or Steam URL.
 
-Option A: Delete by ID
-
+Option A – Delete by ID
 {
-"id": "1196590"
+  "id": "1196590"
 }
-
-Option B: Delete by URL
-
+```
+```json
+Option B – Delete by URL
 {
-"url": "https://store.steampowered.com/app/1196590/
-"
+  "url": "https://store.steampowered.com/app/1196590/"
 }
-
-Response:
-
+```
+Response 
+```json
 {
-"message": "Game removed",
-"id": "1196590"
+  "message": "Game removed",
+  "id": "1196590"
 }
+```
 
-TRIGGER PRICE CHECK
+## 4. Trigger Price Check
 
-GET /check
+**GET** `/check`
 
-What it does:
+Triggers price check for all stored games.
 
-Fetches all games from Redis
-
-Checks prices in parallel using Promise.all
-
-Sends ONE summary email if at least one game matches
-
-Applies cooldown per game
-
-Skips free games
-
-Response Example:
-
+Response
+```json
 {
-"checked": 2,
-"discounted": 1
+  "checked": 2,
+  "discounted": 1
 }
-
-COOLDOWN SYSTEM
-
-Default: 5 days
-
-Prevents duplicate alerts
-
-Only blocks if price hasn't changed
-
-Sends new email if price drops further
-
-Cooldown value in code:
-
-const COOLDOWN_SECONDS = 5 * 24 * 60 * 60;
-
-EMAIL BEHAVIOR
-
-Sends one summary email per check
-
-Only if at least one game qualifies
-
-Includes:
-
-Game name
-
-Current price
-
-Target price
-
-Steam link
+```
