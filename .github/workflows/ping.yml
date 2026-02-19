@@ -2,8 +2,8 @@ name: Daily Steam Price Check
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # Runs daily at 06:00 UTC
-  workflow_dispatch:     # Allows manual trigger from GitHub
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 jobs:
   ping:
@@ -12,4 +12,6 @@ jobs:
     steps:
       - name: Ping /check endpoint
         run: |
-          curl -s https://steam-db-email-notifier.onrender.com/check
+          echo "Pinging server..."
+          curl -v --max-time 4 https://steam-db-email-notifier.onrender.com/check
+          echo "Done"
