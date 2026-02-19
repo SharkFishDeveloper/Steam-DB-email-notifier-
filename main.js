@@ -11,8 +11,8 @@ app.use(express.json());
 
 app.use(
   cors({
-    // origin: "https://steam-frontend-pearl.vercel.app",
-    origin: "http://localhost:5173",
+    origin: "https://steam-frontend-pearl.vercel.app",
+    // origin: "http://localhost:5173",
     methods: ["GET", "POST", "OPTIONS", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
