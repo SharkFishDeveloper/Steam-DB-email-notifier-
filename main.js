@@ -2,10 +2,17 @@ import express from "express";
 import dotenv from "dotenv";
 import { Redis } from "@upstash/redis";
 import { sendEmail } from "./sendEmail.js";
+import cors from "cors"
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(cors({
+  origin: "https://steam-frontend-pearl.vercel.app",
+  methods: ["GET", "POST", "OPTIONS","DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
+}));
 
 const PORT = process.env.PORT || 10000;
 
@@ -121,7 +128,7 @@ app.get("/games", async (req, res) => {
 // Delete by URL or ID
 app.delete("/games", async (req, res) => {
   const { url, id } = req.body;
-
+console.log("BODY:", req.body);
   let gameId = id;
 
   if (url) {
