@@ -2,17 +2,22 @@ import express from "express";
 import dotenv from "dotenv";
 import { Redis } from "@upstash/redis";
 import { sendEmail } from "./sendEmail.js";
-import cors from "cors"
+import cors from "cors";
+
 dotenv.config();
 
 const app = express();
 app.use(express.json());
-app.use(cors({
-  origin: "https://steam-frontend-pearl.vercel.app",
-  methods: ["GET", "POST", "OPTIONS","DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true
-}));
+
+app.use(
+  cors({
+    // origin: "https://steam-frontend-pearl.vercel.app",
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST", "OPTIONS", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
 
 const PORT = process.env.PORT || 10000;
 
@@ -25,19 +30,19 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 
 const EMAIL_INTERVAL_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+const TWO_YEAR = 4 * 180 * 24 * 60 * 60 * 1000;
 
+/* ============================================================
+   FETCH CURRENT PRICE FROM STEAM
+============================================================ */
 
-
-// ================= PRICE CHECK =================
-
-async function checkPrice(game) {
+async function fetchCurrentPrice(game) {
   try {
     const url =
       game.type === "sub"
         ? `https://store.steampowered.com/api/packagedetails?packageids=${game.id}&cc=IN`
         : `https://store.steampowered.com/api/appdetails?appids=${game.id}&cc=IN`;
 
-    // 🚀 Always fetch fresh from Steam (no caching)
     const res = await fetch(url, {
       headers: { "Cache-Control": "no-cache" },
     });
@@ -54,33 +59,44 @@ async function checkPrice(game) {
 
     if (!priceInfo) return null;
 
-    const currentPrice = priceInfo.final / 100;
-
-    if (currentPrice === 0) return null;
-    if (currentPrice > Number(game.targetPrice)) return null;
-
-    // 🔥 Check last email time
-    const lastSent = await redis.get(`last_email_sent:${game.id}`);
-
-    if (lastSent) {
-      const now = Date.now();
-      const diff = now - Number(lastSent);
-
-      if (diff < EMAIL_INTERVAL_MS) {
-        return null; // Not old enough
-      }
-    }
-
-    return { ...game, currentPrice };
+    return {
+      price: priceInfo.final / 100,
+      discount: priceInfo.discount_percent || 0,
+    };
   } catch (err) {
-    console.log("Error checking:", game.name);
+    console.log("Steam fetch error:", err);
     return null;
   }
 }
 
-// ================= ROUTES =================
+/* ============================================================
+   STORE PRICE HISTORY (ONLY IF CHANGED)
+============================================================ */
 
-// Add game via URL
+async function storePriceHistory(game, price, discount) {
+  const key = `price_history:${game.id}`;
+
+  const last = await redis.zrange(key, -1, -1);
+
+  if (last.length > 0) {
+    const lastData = JSON.parse(last[0]);
+    if (lastData.price === price) return;
+  }
+
+  await redis.zadd(key, {
+    score: Date.now(),
+    member: JSON.stringify({ price, discount }),
+  });
+
+  // Trim older than 6 months
+  const cutoff = Date.now() - TWO_YEAR;
+  await redis.zremrangebyscore(key, 0, cutoff);
+}
+
+/* ============================================================
+   ADD GAME
+============================================================ */
+
 app.post("/games", async (req, res) => {
   const { url, targetPrice } = req.body;
 
@@ -112,23 +128,90 @@ app.post("/games", async (req, res) => {
     name,
     type,
     id,
-    targetPrice:Number(targetPrice),
+    targetPrice: Number(targetPrice),
   });
 
   res.json({ message: "Game added", name, id, type, targetPrice });
 });
 
-// List games only
+/* ============================================================
+   LIST GAMES (NO PRICE)
+============================================================ */
+
 app.get("/games", async (req, res) => {
   const keys = await redis.keys("game:*");
   const games = await Promise.all(keys.map((k) => redis.get(k)));
   res.json(games);
 });
 
-// Delete by URL or ID
+/* ============================================================
+   GET SINGLE GAME WITH CURRENT PRICE + STATS
+============================================================ */
+
+app.get("/games/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const game = await redis.get(`game:${id}`);
+  if (!game) return res.status(404).json({ error: "Game not found" });
+
+  const priceData = await fetchCurrentPrice(game);
+  if (!priceData)
+    return res.status(400).json({ error: "Price fetch failed" });
+
+  const history = await redis.zrange(
+    `price_history:${id}`,
+    0,
+    -1
+  );
+
+  const parsed = history.map((h) => JSON.parse(h));
+
+  const lowest =
+    parsed.length > 0
+      ? Math.min(...parsed.map((p) => p.price))
+      : priceData.price;
+
+  res.json({
+    ...game,
+    currentPrice: priceData.price,
+    discount: priceData.discount,
+    lowestPrice: lowest,
+  });
+});
+
+/* ============================================================
+   GET PRICE HISTORY (GRAPH READY)
+============================================================ */
+
+app.get("/games/:id/history", async (req, res) => {
+  const { id } = req.params;
+
+  const raw = await redis.zrange(
+    `price_history:${id}`,
+    0,
+    -1,
+    { withScores: true }
+  );
+
+  const formatted = [];
+
+  for (let i = 0; i < raw.length; i += 2) {
+    formatted.push({
+      ...JSON.parse(raw[i]),
+      time: Number(raw[i + 1]),
+    });
+  }
+
+  res.json(formatted);
+});
+
+/* ============================================================
+   DELETE GAME
+============================================================ */
+
 app.delete("/games", async (req, res) => {
   const { url, id } = req.body;
-console.log("BODY:", req.body);
+
   let gameId = id;
 
   if (url) {
@@ -142,40 +225,63 @@ console.log("BODY:", req.body);
     return res.status(400).json({ error: "Provide url or id" });
 
   await redis.del(`game:${gameId}`);
+  await redis.del(`price_history:${gameId}`);
   await redis.del(`last_email_sent:${gameId}`);
 
   res.json({ message: "Game removed", id: gameId });
 });
 
-// Trigger price check (parallel + single email)
+/* ============================================================
+   DAILY CHECK ROUTE
+============================================================ */
+
 app.get("/check", async (req, res) => {
   const keys = await redis.keys("game:*");
   const games = await Promise.all(keys.map((k) => redis.get(k)));
+
   if (games.length === 0) {
-  return res.json({ checked: 0, discounted: 0 });
-}
-  const results = await Promise.all(games.map(checkPrice));
-  const discountedGames = results.filter(Boolean);
-
-  if (discountedGames.length > 0) {
-    const sent = await sendEmail(discountedGames,RESEND_API_KEY,ALERT_EMAIL);
-
-    if (sent) {
-    const now = Date.now();
-
-    await Promise.all(
-        discountedGames.map((game) =>
-        redis.set(`last_email_sent:${game.id}`, now)
-        )
-    );
-    }
+    return res.json({ checked: 0 });
   }
 
-  res.json({
-    checked: games.length,
-    discounted: discountedGames.length,
-  });
+  await Promise.all(
+    games.map(async (game) => {
+      try {
+        const priceData = await fetchCurrentPrice(game);
+        if (!priceData) return;
+
+        await storePriceHistory(
+          game,
+          priceData.price,
+          priceData.discount
+        );
+
+        if (priceData.price <= Number(game.targetPrice)) {
+          const lastSent = await redis.get(`last_email_sent:${game.id}`);
+          const now = Date.now();
+
+          if (!lastSent || now - Number(lastSent) > EMAIL_INTERVAL_MS) {
+            const sent = await sendEmail(
+              [{ ...game, currentPrice: priceData.price }],
+              RESEND_API_KEY,
+              ALERT_EMAIL
+            );
+
+            if (sent) {
+              await redis.set(`last_email_sent:${game.id}`, now);
+            }
+          }
+        }
+      } catch (err) {
+        console.log(`Error processing game ${game.id}:`, err);
+      }
+    })
+  );
+
+  res.json({ checked: games.length });
 });
+/* ============================================================
+   START SERVER
+============================================================ */
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
