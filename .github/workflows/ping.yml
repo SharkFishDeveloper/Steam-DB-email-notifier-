@@ -2,16 +2,30 @@ name: Daily Steam Price Check
 
 on:
   schedule:
+    # Runs every day at 6:00 UTC
     - cron: "0 6 * * *"
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
-      - name: Ping /check endpoint
+      - name: Ping /check endpoint (with retry)
         run: |
-          echo "Pinging server..."
-          curl -v --max-time 10 https://steam-db-email-notifier.onrender.com/check
-          echo "Done"
+          echo "🚀 Pinging server..."
+
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+
+            curl -v \
+              --connect-timeout 20 \
+              --max-time 60 \
+              https://steam-db-email-notifier.onrender.com/check && break
+
+            echo "Retrying in 15 seconds..."
+            sleep 15
+          done
+
+          echo "✅ Done"
