@@ -13,5 +13,5 @@ jobs:
       - name: Ping /check endpoint
         run: |
           echo "Pinging server..."
-          curl -v --max-time 4 https://steam-db-email-notifier.onrender.com/check
+          curl -v --max-time 10 https://steam-db-email-notifier.onrender.com/check
           echo "Done"
