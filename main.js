@@ -11,8 +11,10 @@ app.use(express.json());
 
 app.use(
   cors({
-    origin: "https://steam-frontend-pearl.vercel.app",
-    // origin: "http://localhost:5173",
+    origin: [
+      "https://steam-frontend-pearl.vercel.app",
+      "http://localhost:5173",
+    ],
     methods: ["GET", "POST", "OPTIONS", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -30,7 +32,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const ALERT_EMAIL = process.env.ALERT_EMAIL;
 
 const EMAIL_INTERVAL_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
-const TWO_YEAR = 4 * 180 * 24 * 60 * 60 * 1000;
+const TWO_YEAR = 2 * 365 * 24 * 60 * 60 * 1000; // FIXED
 
 /* ============================================================
    FETCH CURRENT PRICE FROM STEAM
@@ -70,7 +72,7 @@ async function fetchCurrentPrice(game) {
 }
 
 /* ============================================================
-   STORE PRICE HISTORY (ONLY IF CHANGED)
+   STORE PRICE HISTORY
 ============================================================ */
 
 async function storePriceHistory(game, price, discount) {
@@ -88,7 +90,6 @@ async function storePriceHistory(game, price, discount) {
     member: JSON.stringify({ price, discount }),
   });
 
-  // Trim older than 6 months
   const cutoff = Date.now() - TWO_YEAR;
   await redis.zremrangebyscore(key, 0, cutoff);
 }
@@ -100,7 +101,7 @@ async function storePriceHistory(game, price, discount) {
 app.post("/games", async (req, res) => {
   const { url, targetPrice } = req.body;
 
-  if (!url || !targetPrice)
+  if (!url || targetPrice === undefined)
     return res.status(400).json({ error: "URL and targetPrice required" });
 
   const match = url.match(/store\.steampowered\.com\/(app|sub)\/(\d+)/);
@@ -124,46 +125,50 @@ app.post("/games", async (req, res) => {
 
   const name = item.data.name;
 
-  await redis.set(`game:${id}`, {
-    name,
-    type,
-    id,
-    targetPrice: Number(targetPrice),
-  });
+  await redis.set(
+    `game:${id}`,
+    JSON.stringify({
+      name,
+      type,
+      id,
+      targetPrice: Number(targetPrice),
+    })
+  );
 
   res.json({ message: "Game added", name, id, type, targetPrice });
 });
 
 /* ============================================================
-   LIST GAMES (NO PRICE)
+   LIST GAMES
 ============================================================ */
 
 app.get("/games", async (req, res) => {
   const keys = await redis.keys("game:*");
-  const games = await Promise.all(keys.map((k) => redis.get(k)));
+
+  const games = await Promise.all(
+    keys.map(async (k) => JSON.parse(await redis.get(k)))
+  );
+
   res.json(games);
 });
 
 /* ============================================================
-   GET SINGLE GAME WITH CURRENT PRICE + STATS
+   GET SINGLE GAME
 ============================================================ */
 
 app.get("/games/:id", async (req, res) => {
   const { id } = req.params;
 
-  const game = await redis.get(`game:${id}`);
-  if (!game) return res.status(404).json({ error: "Game not found" });
+  const raw = await redis.get(`game:${id}`);
+  if (!raw) return res.status(404).json({ error: "Game not found" });
+
+  const game = JSON.parse(raw);
 
   const priceData = await fetchCurrentPrice(game);
   if (!priceData)
     return res.status(400).json({ error: "Price fetch failed" });
 
-  const history = await redis.zrange(
-    `price_history:${id}`,
-    0,
-    -1
-  );
-
+  const history = await redis.zrange(`price_history:${id}`, 0, -1);
   const parsed = history.map((h) => JSON.parse(h));
 
   const lowest =
@@ -180,18 +185,15 @@ app.get("/games/:id", async (req, res) => {
 });
 
 /* ============================================================
-   GET PRICE HISTORY (GRAPH READY)
+   GET HISTORY
 ============================================================ */
 
 app.get("/games/:id/history", async (req, res) => {
   const { id } = req.params;
 
-  const raw = await redis.zrange(
-    `price_history:${id}`,
-    0,
-    -1,
-    { withScores: true }
-  );
+  const raw = await redis.zrange(`price_history:${id}`, 0, -1, {
+    withScores: true,
+  });
 
   const formatted = [];
 
@@ -232,12 +234,15 @@ app.delete("/games", async (req, res) => {
 });
 
 /* ============================================================
-   DAILY CHECK ROUTE
+   DAILY CHECK
 ============================================================ */
 
 app.get("/check", async (req, res) => {
   const keys = await redis.keys("game:*");
-  const games = await Promise.all(keys.map((k) => redis.get(k)));
+
+  const games = await Promise.all(
+    keys.map(async (k) => JSON.parse(await redis.get(k)))
+  );
 
   if (games.length === 0) {
     return res.json({ checked: 0 });
@@ -279,6 +284,7 @@ app.get("/check", async (req, res) => {
 
   res.json({ checked: games.length });
 });
+
 /* ============================================================
    START SERVER
 ============================================================ */
