@@ -1,0 +1,31 @@
+name: Daily Steam Email Trigger
+
+on:
+  schedule:
+    # Runs every day at 6:00 UTC
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Trigger /email endpoint (with retry)
+        run: |
+          echo "📧 Triggering email endpoint..."
+
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+
+            curl -v \
+              --connect-timeout 20 \
+              --max-time 60 \
+              https://steam-db-email-notifier.onrender.com/email && break
+
+            echo "Retrying in 15 seconds..."
+            sleep 15
+          done
+
+          echo "✅ Done"
